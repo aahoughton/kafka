@@ -1194,6 +1194,17 @@ export class Consumer<Key = Buffer, Value = Buffer, HeaderKey = Buffer, HeaderVa
               return
             }
 
+            // The rejoin may have moved partitions to another member, whose offsets must not be overwritten
+            const lost = options.offsets.some(({ topic, partition }) => {
+              const assignment = this.assignments?.find(candidate => candidate.topic === topic)
+              return !assignment?.partitions.includes(partition)
+            })
+
+            if (lost) {
+              callback(new UserError('Cannot commit offsets for partitions no longer assigned to this consumer.'))
+              return
+            }
+
             this.#commit(options, callback, rejoinAttempts + 1)
           })
           return

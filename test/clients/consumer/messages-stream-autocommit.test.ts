@@ -1,7 +1,7 @@
 import { deepStrictEqual, ok, strictEqual } from 'node:assert'
 import { EventEmitter } from 'node:events'
 import { test } from 'node:test'
-import { ProtocolError } from '../../../src/errors.ts'
+import { ProtocolError, UserError } from '../../../src/errors.ts'
 import { kCreateConnectionPool, kPrometheus } from '../../../src/clients/base/base.ts'
 import { MessagesStream, MessagesStreamFallbackModes, MessagesStreamModes } from '../../../src/index.ts'
 import { kAutocommit, kGetFetchNode } from '../../../src/symbols.ts'
@@ -113,6 +113,22 @@ test('kAutocommit keeps offsets queued after a transient commit error', () => {
   stream[kAutocommit]()
 
   deepStrictEqual(stream.offsetsToCommit.get('test-topic:0'), offset)
+  stream.destroy()
+})
+
+test('kAutocommit drops offsets for partitions lost while the commit was in flight', () => {
+  const consumer = createFakeConsumer(true)
+  mockMethod(consumer, 'commit', 1, undefined, undefined, (_original, ...args) => {
+    // The commit rejoined the group and the partition moved to another member
+    consumer.assignments = []
+    args.at(-1)(new UserError('Cannot commit offsets for partitions no longer assigned to this consumer.'))
+  })
+  const stream = createStream(consumer)
+  stream.offsetsToCommit.set('test-topic:0', { topic: 'test-topic', partition: 0, offset: 5n, leaderEpoch: 0 })
+
+  stream[kAutocommit]()
+
+  strictEqual(stream.offsetsToCommit.size, 0)
   stream.destroy()
 })
 

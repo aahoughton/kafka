@@ -452,6 +452,8 @@ Note that all the partitions must be hosted on the node otherwise the operation 
 
 Commits offsets for consumed messages.
 
+If the broker requires the consumer to rejoin the group, the commit is retried after the rejoin. It fails instead if any of its partitions is no longer assigned to the consumer.
+
 The return value is `void`.
 
 Options:

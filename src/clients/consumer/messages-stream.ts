@@ -1270,6 +1270,11 @@ export class MessagesStream<Key, Value, HeaderKey, HeaderValue> extends Readable
           // Keep offsets produced while the commit was in flight, and retry the failed snapshot
           // without replacing a newer offset for the same partition.
           for (const offset of offsets) {
+            // The commit may have rejoined the group and lost the partition to another member
+            if (!this.#assignmentsForTopic(offset.topic)?.partitions.includes(offset.partition)) {
+              continue
+            }
+
             const key = partitionKey(offset.topic, offset.partition)
             const current = this.#offsetsToCommit.get(key)
             if (!current || current.offset < offset.offset) {

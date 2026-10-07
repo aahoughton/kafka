@@ -78,6 +78,7 @@ import {
 } from '../../../src/index.ts'
 import { kGetFetchNode } from '../../../src/symbols.ts'
 import {
+  createAdmin,
   createConsumer,
   createCreationChannelVerifier,
   createGroupId,
@@ -4834,6 +4835,62 @@ test('commit should not crash when the error is not a library error', async t =>
 
   // Nothing could be classified, so the cached coordinator is left alone.
   strictEqual(consumer.coordinatorId, coordinatorId)
+})
+
+test('commit should fail instead of re-sending offsets for partitions lost during a rejoin', async t => {
+  const topic = await createTopic(t, true, 2)
+  const groupId = createGroupId()
+  const admin = createAdmin(t)
+
+  const consumer1 = createConsumer(t, { groupId })
+  await consumer1.topics.trackAll(topic)
+  await consumer1.joinGroup()
+  deepStrictEqual(consumer1.assignments, [{ topic, partitions: [0, 1] }])
+
+  const consumer2 = createConsumer(t, { groupId })
+  await consumer2.topics.trackAll(topic)
+
+  let commits = 0
+  let joined: Promise<string>
+  mockAPI(consumer1[kConnections], offsetCommitV9.api.key, null, null, (original, ...args) => {
+    commits++
+
+    if (commits > 1) {
+      original(...args)
+      return true
+    }
+
+    // Fail the first commit once consumer2 has started a rebalance, as the broker would
+    joined = consumer2.joinGroup()
+    const callback = args.at(-1)
+    waitFor(
+      async () => {
+        const group = (await admin.describeGroups({ groups: [groupId] })).get(groupId)
+        strictEqual(group?.state, 'PreparingRebalance')
+      },
+      { timeout: 10_000 }
+    ).then(() => callback(new ProtocolError('REBALANCE_IN_PROGRESS')), callback)
+
+    return true
+  })
+
+  await rejects(
+    () =>
+      consumer1.commit({
+        offsets: [
+          { topic, partition: 0, offset: 1n, leaderEpoch: 0 },
+          { topic, partition: 1, offset: 1n, leaderEpoch: 0 }
+        ]
+      }),
+    error => {
+      strictEqual(error instanceof UserError, true)
+      return true
+    }
+  )
+
+  await joined!
+  strictEqual(consumer1.assignments![0].partitions.length, 1)
+  strictEqual(commits, 1)
 })
 
 test('a closed connection pool should surface a library error rather than an uncaught TypeError', async t => {
